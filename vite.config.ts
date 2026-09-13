@@ -32,6 +32,7 @@ export default defineConfig({
   ],
   server: {
     port: 8073,
+    allowedHosts: ['bitdoku.jhnbrd.com', '.jhnbrd.com', 'localhost'],
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
