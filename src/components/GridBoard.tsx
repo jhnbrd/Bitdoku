@@ -40,9 +40,27 @@ export const GridBoard: React.FC<GridBoardProps> = ({
     }
   };
 
+  const lastTapRef = useRef<{ row: number; col: number; time: number } | null>(null);
+
   const handlePointerDown = (r: number, c: number, e: React.PointerEvent) => {
     if (readOnly) return;
     isDraggingRef.current = true;
+
+    const now = Date.now();
+    const lastTap = lastTapRef.current;
+
+    // Detect double-tap/double-click on the same cell within 300ms
+    const isDoubleTap = lastTap && lastTap.row === r && lastTap.col === c && (now - lastTap.time) < 300;
+    lastTapRef.current = { row: r, col: c, time: now };
+
+    if (isDoubleTap) {
+      // Double tap on any mode immediately toggles/places a Bit!
+      const current = grid[r][c];
+      const target: CellState = current === 'bit' ? 'empty' : 'bit';
+      dragTargetStateRef.current = null; // Don't drag-paint bits
+      applyCellState(r, c, target);
+      return;
+    }
 
     // Right-click or touch/left click when in 'blocked' mode
     if (e.button === 2) {

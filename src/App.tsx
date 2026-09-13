@@ -537,7 +537,12 @@ export const App: React.FC = () => {
           hasNextLevel={!activePuzzle.id.startsWith('daily_') && currentLevelIndex < getTotalLevels(currentDifficulty)}
           onNextLevel={handleNextLevel}
           onReplay={handleResetBoard}
-          onBackToHub={() => setView('levels')}
+          onBackToHub={() => {
+            setIsGameWon(false);
+            setIsGameOver(false);
+            setActivePuzzle(null);
+            setView('levels');
+          }}
         />
       )}
 
@@ -549,7 +554,12 @@ export const App: React.FC = () => {
             setLives(activePuzzle.lives);
             setIsGameOver(false);
           }}
-          onBackToHub={() => setView('levels')}
+          onBackToHub={() => {
+            setIsGameWon(false);
+            setIsGameOver(false);
+            setActivePuzzle(null);
+            setView('levels');
+          }}
         />
       )}
 
