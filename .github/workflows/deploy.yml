@@ -1,0 +1,46 @@
+name: Deploy to Cloudflare Tunnel
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  deployment:
+    name: Register Deployment Status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Deployment
+        uses: chrnorm/deployment-action@v2
+        id: deployment
+        with:
+          token: ${{ github.token }}
+          environment: production
+          environment-url: https://bitdoku.jhnbrd.com
+          description: "Bitdoku live deployment hosted via local server and Cloudflare Tunnel"
+
+      - name: Update Deployment Status to Success
+        if: success()
+        uses: chrnorm/deployment-status@v2
+        with:
+          token: ${{ github.token }}
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+          state: "success"
+          environment-url: https://bitdoku.jhnbrd.com
+          description: "Bitdoku successfully live at https://bitdoku.jhnbrd.com"
+
+      - name: Update Deployment Status to Failure
+        if: failure()
+        uses: chrnorm/deployment-status@v2
+        with:
+          token: ${{ github.token }}
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+          state: "failure"
