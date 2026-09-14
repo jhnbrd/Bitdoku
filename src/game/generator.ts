@@ -108,24 +108,20 @@ export function generateRegions(
     }
   }
 
-  // Patch any orphaned cells (rare edge case)
+  // Check that no region is starved (< 2 cells on small boards, < 3 cells on larger boards)
+  // If any region is undersized, reject and let caller re-seed for a balanced board.
+  const minCells = size <= 6 ? 2 : 3;
+  const counts = Array(size).fill(0);
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
-      if (grid[r][c] === -1) {
-        for (const [dr, dc] of directions) {
-          const nr = r + dr;
-          const nc = c + dc;
-          if (
-            nr >= 0 && nr < size &&
-            nc >= 0 && nc < size &&
-            grid[nr][nc] !== -1
-          ) {
-            grid[r][c] = grid[nr][nc];
-            break;
-          }
-        }
+      if (grid[r][c] >= 0 && grid[r][c] < size) {
+        counts[grid[r][c]]++;
       }
     }
+  }
+  if (counts.some(cnt => cnt < minCells)) {
+    // Return empty grid to signal unacceptable region balance
+    return [];
   }
 
   return grid;
@@ -136,7 +132,9 @@ export function generateRegions(
 // ---------------------------------------------------------------------------
 function buildRegionCells(size: number, regions: number[][]): [number, number][][] {
   const cells: [number, number][][] = Array.from({ length: size }, () => []);
+  if (!regions || regions.length !== size) return cells;
   for (let r = 0; r < size; r++) {
+    if (!regions[r] || regions[r].length !== size) continue;
     for (let c = 0; c < size; c++) {
       const reg = regions[r][c];
       if (reg >= 0 && reg < size) {
@@ -148,19 +146,13 @@ function buildRegionCells(size: number, regions: number[][]): [number, number][]
 }
 
 // ---------------------------------------------------------------------------
-// Count solutions — region-by-region solver (correct, deadlock-aware)
+// Count solutions -- region-by-region solver (correct, deadlock-aware)
 //
-// This solver iterates over each region in turn and tries to place a queen
-// in any valid cell of that region.  Because regions are tried in order, the
-// solver immediately detects when a region has NO valid remaining cell and
-// backtracks — catching "boxed-out region" deadlocks that the old row-by-row
-// approach missed.
+// Iterates over each region and tries placing a queen in every valid cell.
+// Immediately detects boxed-out regions (no valid cells) and backtracks.
 //
 // Constraints enforced:
-//   • 1 queen per region   (outer loop)
-//   • 1 queen per row      (usedRows set)
-//   • 1 queen per column   (usedCols set)
-//   • No adjacency / touching (Chebyshev distance > 1)
+//   1 queen per region / 1 per row / 1 per col / no adjacency
 // ---------------------------------------------------------------------------
 export function countSolutions(
   size: number,
@@ -217,20 +209,35 @@ export function countSolutions(
 }
 
 // ---------------------------------------------------------------------------
-// Logical solvability check — full constraint propagation (no guessing)
+// Logical solvability check -- full constraint propagation (no guessing)
 //
-// Uses a candidate-elimination approach:
-//   1. Tracks a boolean candidate grid (which cells are still valid)
-//   2. Propagates eliminations when a queen is placed (row, col, adjacency)
-//   3. Detects forced moves via:
-//      • Naked single in region  (only 1 candidate cell left for a region)
-//      • Naked single in row     (only 1 unplaced region has any candidate in this row)
-//      • Naked single in column  (same for columns)
-//      • Pointing region-row     (all region candidates in 1 row → eliminate
-//                                  that row from all other unplaced regions)
-//      • Pointing region-col     (same for columns)
+// Uses a candidate-elimination approach with 7 deduction techniques:
 //
-// Returns true only if the puzzle resolves fully without any guessing.
+//   1. Naked single in region
+//         Only 1 candidate cell left for a region -> place queen there
+//
+//   2. Pointing region->row
+//         All candidates of region R are in the same row ->
+//         no OTHER region can use that row -> eliminate from others
+//
+//   3. Pointing region->col
+//         Same as above but for columns
+//
+//   4. Row-locked region  [KEY MISSING DEDUCTION]
+//         Only 1 unplaced region has any candidate in row R ->
+//         that region MUST use row R ->
+//         eliminate all of that region's cells NOT in row R
+//
+//   5. Col-locked region  [KEY MISSING DEDUCTION]
+//         Same as above but for columns
+//
+//   6. Hidden single in row
+//         Only 1 specific (region, col) combo can fill row R -> place it
+//
+//   7. Hidden single in col
+//         Only 1 specific (region, row) combo can fill col C -> place it
+//
+// Returns true only if the puzzle fully resolves without any guessing.
 // ---------------------------------------------------------------------------
 export function isLogicallySolvable(size: number, regions: number[][]): boolean {
   const regionCells = buildRegionCells(size, regions);
@@ -247,23 +254,20 @@ export function isLogicallySolvable(size: number, regions: number[][]): boolean 
   const usedRows = new Set<number>();
   const usedCols = new Set<number>();
 
-  // Eliminate cell (r, c) from candidates (idempotent)
   function eliminate(r: number, c: number): void {
     candidate[r][c] = false;
   }
 
-  // Place a queen at (r, c) for region reg.
-  // Propagates: eliminates entire row, entire col, all adjacent cells.
+  // Place queen at (r,c) for region reg.
+  // Propagates: eliminates entire row, col, and all 8 adjacent cells.
   function placeQueen(reg: number, r: number, c: number): void {
     placedRegions.add(reg);
     usedRows.add(r);
     usedCols.add(c);
-    // Eliminate row and col
     for (let i = 0; i < size; i++) {
       candidate[r][i] = false;
       candidate[i][c] = false;
     }
-    // Eliminate adjacent 8 cells
     for (let dr = -1; dr <= 1; dr++) {
       for (let dc = -1; dc <= 1; dc++) {
         const nr = r + dr;
@@ -275,11 +279,10 @@ export function isLogicallySolvable(size: number, regions: number[][]): boolean 
     }
   }
 
-  // Get live candidate cells for a region
+  // Live candidate cells for a region
   function getRegionCandidates(reg: number): [number, number][] {
-    return regionCells[reg].filter(([r, c]) =>
-      !placedRegions.has(reg) && candidate[r][c]
-    );
+    if (placedRegions.has(reg)) return [];
+    return regionCells[reg].filter(([r, c]) => candidate[r][c]);
   }
 
   // Constraint propagation loop
@@ -287,108 +290,150 @@ export function isLogicallySolvable(size: number, regions: number[][]): boolean 
   while (progress) {
     progress = false;
 
-    // --- 1. Naked single in region (only 1 candidate cell) ---
+    // --- Deadlock check: unplaced region with 0 candidates -> unsolvable ---
+    for (let reg = 0; reg < size; reg++) {
+      if (placedRegions.has(reg)) continue;
+      if (getRegionCandidates(reg).length === 0) return false;
+    }
+
+    // --- 1. Naked single in region ---
     for (let reg = 0; reg < size; reg++) {
       if (placedRegions.has(reg)) continue;
       const cands = getRegionCandidates(reg);
-      if (cands.length === 0) return false; // Deadlock
+      if (cands.length === 0) return false;
       if (cands.length === 1) {
         placeQueen(reg, cands[0][0], cands[0][1]);
         progress = true;
       }
     }
 
-    // --- 2. Hidden single in row (only 1 region can go in this row) ---
+    // --- 2. Pointing region->row ---
+    for (let reg = 0; reg < size; reg++) {
+      if (placedRegions.has(reg)) continue;
+      const cands = getRegionCandidates(reg);
+      if (cands.length === 0) return false;
+      const rowSet = new Set(cands.map(([r]) => r));
+      if (rowSet.size === 1) {
+        const lockedRow = cands[0][0];
+        for (let otherReg = 0; otherReg < size; otherReg++) {
+          if (otherReg === reg || placedRegions.has(otherReg)) continue;
+          for (const [r, c] of regionCells[otherReg]) {
+            if (r === lockedRow && candidate[r][c]) {
+              eliminate(r, c);
+              progress = true;
+            }
+          }
+        }
+      }
+    }
+
+    // --- 3. Pointing region->col ---
+    for (let reg = 0; reg < size; reg++) {
+      if (placedRegions.has(reg)) continue;
+      const cands = getRegionCandidates(reg);
+      if (cands.length === 0) return false;
+      const colSet = new Set(cands.map(([, c]) => c));
+      if (colSet.size === 1) {
+        const lockedCol = cands[0][1];
+        for (let otherReg = 0; otherReg < size; otherReg++) {
+          if (otherReg === reg || placedRegions.has(otherReg)) continue;
+          for (const [r, c] of regionCells[otherReg]) {
+            if (c === lockedCol && candidate[r][c]) {
+              eliminate(r, c);
+              progress = true;
+            }
+          }
+        }
+      }
+    }
+
+    // --- 4. Row-locked region ---
+    // If only 1 unplaced region has any candidate in row R, that region
+    // MUST place its queen in row R -> eliminate its cells NOT in row R.
     for (let row = 0; row < size; row++) {
       if (usedRows.has(row)) continue;
-      let matchReg = -1, matchCol = -1, matchCount = 0;
+      let lockedReg = -1;
+      let ambiguous = false;
       for (let reg = 0; reg < size; reg++) {
         if (placedRegions.has(reg)) continue;
-        const rowCands = getRegionCandidates(reg).filter(([r]) => r === row);
-        if (rowCands.length > 0) {
-          if (matchCount === 0) {
-            // All row candidates of this region must be in 1 col to be forced
-            matchReg = reg;
-            matchCount++;
-            // We might have multiple cols in the row — need to check if forced
-            if (rowCands.length === 1) matchCol = rowCands[0][1];
+        if (getRegionCandidates(reg).some(([r]) => r === row)) {
+          if (lockedReg === -1) {
+            lockedReg = reg;
           } else {
-            matchCount++;
+            ambiguous = true;
             break;
           }
         }
       }
-      // Only 1 region can place in this row AND it has exactly 1 col option
-      if (matchCount === 1 && matchCol !== -1 && !placedRegions.has(matchReg)) {
-        placeQueen(matchReg, row, matchCol);
-        progress = true;
+      if (!ambiguous && lockedReg !== -1) {
+        for (const [r, c] of regionCells[lockedReg]) {
+          if (r !== row && candidate[r][c]) {
+            eliminate(r, c);
+            progress = true;
+          }
+        }
       }
     }
 
-    // --- 3. Hidden single in column ---
+    // --- 5. Col-locked region ---
+    // If only 1 unplaced region has any candidate in col C, that region
+    // MUST place its queen in col C -> eliminate its cells NOT in col C.
     for (let col = 0; col < size; col++) {
       if (usedCols.has(col)) continue;
-      let matchReg = -1, matchRow = -1, matchCount = 0;
+      let lockedReg = -1;
+      let ambiguous = false;
       for (let reg = 0; reg < size; reg++) {
         if (placedRegions.has(reg)) continue;
-        const colCands = getRegionCandidates(reg).filter(([, c]) => c === col);
-        if (colCands.length > 0) {
-          if (matchCount === 0) {
-            matchReg = reg;
-            matchCount++;
-            if (colCands.length === 1) matchRow = colCands[0][0];
+        if (getRegionCandidates(reg).some(([, c]) => c === col)) {
+          if (lockedReg === -1) {
+            lockedReg = reg;
           } else {
-            matchCount++;
+            ambiguous = true;
             break;
           }
         }
       }
-      if (matchCount === 1 && matchRow !== -1 && !placedRegions.has(matchReg)) {
-        placeQueen(matchReg, matchRow, col);
+      if (!ambiguous && lockedReg !== -1) {
+        for (const [r, c] of regionCells[lockedReg]) {
+          if (c !== col && candidate[r][c]) {
+            eliminate(r, c);
+            progress = true;
+          }
+        }
+      }
+    }
+
+    // --- 6. Hidden single in row ---
+    // Only 1 specific (region, col) pair has a candidate in row R -> place it.
+    for (let row = 0; row < size; row++) {
+      if (usedRows.has(row)) continue;
+      const rowOptions: { reg: number; col: number }[] = [];
+      for (let reg = 0; reg < size; reg++) {
+        if (placedRegions.has(reg)) continue;
+        for (const [r, c] of getRegionCandidates(reg)) {
+          if (r === row) rowOptions.push({ reg, col: c });
+        }
+      }
+      if (rowOptions.length === 1 && !placedRegions.has(rowOptions[0].reg)) {
+        placeQueen(rowOptions[0].reg, row, rowOptions[0].col);
         progress = true;
       }
     }
 
-    // --- 4. Pointing: region's candidates all in same row → eliminate that
-    //        row from all other unplaced regions' candidates ---
-    for (let reg = 0; reg < size; reg++) {
-      if (placedRegions.has(reg)) continue;
-      const cands = getRegionCandidates(reg);
-      if (cands.length === 0) return false;
-      const rows = new Set(cands.map(([r]) => r));
-      if (rows.size === 1) {
-        // All this region's candidates are in row `pointedRow`.
-        // No other region can use this row.
-        const pointedRow = cands[0][0];
-        for (let otherReg = 0; otherReg < size; otherReg++) {
-          if (otherReg === reg || placedRegions.has(otherReg)) continue;
-          for (const [r, c] of regionCells[otherReg]) {
-            if (r === pointedRow && candidate[r][c]) {
-              eliminate(r, c);
-              progress = true;
-            }
-          }
+    // --- 7. Hidden single in col ---
+    // Only 1 specific (region, row) pair has a candidate in col C -> place it.
+    for (let col = 0; col < size; col++) {
+      if (usedCols.has(col)) continue;
+      const colOptions: { reg: number; row: number }[] = [];
+      for (let reg = 0; reg < size; reg++) {
+        if (placedRegions.has(reg)) continue;
+        for (const [r, c] of getRegionCandidates(reg)) {
+          if (c === col) colOptions.push({ reg, row: r });
         }
       }
-    }
-
-    // --- 5. Pointing: region's candidates all in same col ---
-    for (let reg = 0; reg < size; reg++) {
-      if (placedRegions.has(reg)) continue;
-      const cands = getRegionCandidates(reg);
-      if (cands.length === 0) return false;
-      const cols = new Set(cands.map(([, c]) => c));
-      if (cols.size === 1) {
-        const pointedCol = cands[0][1];
-        for (let otherReg = 0; otherReg < size; otherReg++) {
-          if (otherReg === reg || placedRegions.has(otherReg)) continue;
-          for (const [r, c] of regionCells[otherReg]) {
-            if (c === pointedCol && candidate[r][c]) {
-              eliminate(r, c);
-              progress = true;
-            }
-          }
-        }
+      if (colOptions.length === 1 && !placedRegions.has(colOptions[0].reg)) {
+        placeQueen(colOptions[0].reg, colOptions[0].row, col);
+        progress = true;
       }
     }
   }
@@ -443,9 +488,9 @@ export const DIFFICULTY_CONFIG: Record<
 
 // ---------------------------------------------------------------------------
 // Generate a certified puzzle
-//   ✓ Unique solution (exactly 1)
-//   ✓ Solution passes all rules (1/row, 1/col, 1/region, no adjacency)
-//   ✓ Logically solvable without guessing (constraint propagation only)
+//   1. Unique solution (exactly 1)
+//   2. Solution passes all rules (1/row, 1/col, 1/region, no adjacency)
+//   3. Logically solvable without guessing (constraint propagation only)
 // ---------------------------------------------------------------------------
 export function generateValidPuzzle(
   id: string,
@@ -458,8 +503,7 @@ export function generateValidPuzzle(
   const size = customSize || config.size;
   const lives = customLives || config.lives;
 
-  // Scale attempt count with board size — larger boards need more seeds to find
-  // a logically-solvable unique puzzle.
+  // Scale attempt count with board size -- larger boards need more seeds.
   const maxPrimaryAttempts = size <= 6 ? 100 : size <= 8 ? 300 : size <= 9 ? 800 : 2000;
 
   let currentSeed = seed;
@@ -469,6 +513,10 @@ export function generateValidPuzzle(
 
     if (queens && queens.length === size) {
       const regions = generateRegions(size, queens, rng);
+      if (regions.length !== size) {
+        currentSeed += 7919;
+        continue;
+      }
 
       // 1. Unique solution check
       const solCount = countSolutions(size, regions, 2);
@@ -483,7 +531,7 @@ export function generateValidPuzzle(
         continue;
       }
 
-      // 3. Logical solvability — no guessing required
+      // 3. Logical solvability -- no guessing required
       if (!isLogicallySolvable(size, regions)) {
         currentSeed += 7919;
         continue;
@@ -503,23 +551,25 @@ export function generateValidPuzzle(
     currentSeed += 7919;
   }
 
-  // Extended fallback: try a much wider seed range with a different step.
-  // Still tries for logical solvability first, then relaxes that requirement.
+  // Extended fallback: wider seed range with unique prime stepping.
+  // Strictly enforces all rules: unique solution, valid solution, and logical solvability.
   const fallbackStep = 104729;
   let fallbackSeed = seed + 1_000_000;
-  const maxFallbackAttempts = size <= 8 ? 500 : 1500;
+  const maxFallbackAttempts = size <= 8 ? 800 : 2500;
   for (let attempt = 0; attempt < maxFallbackAttempts; attempt++) {
     const rng = new SeededRandom(fallbackSeed);
     const queens = findQueenPlacements(size, rng);
 
     if (queens && queens.length === size) {
       const regions = generateRegions(size, queens, rng);
-      const solCount = countSolutions(size, regions, 2);
+      if (regions.length === size) {
+        const solCount = countSolutions(size, regions, 2);
 
-      if (solCount === 1 && validateSolution(size, regions, queens)) {
-        // Prefer logically solvable, but accept non-logical after half the budget
-        const requireLogical = attempt < maxFallbackAttempts / 2;
-        if (!requireLogical || isLogicallySolvable(size, regions)) {
+        if (
+          solCount === 1 &&
+          validateSolution(size, regions, queens) &&
+          isLogicallySolvable(size, regions)
+        ) {
           return {
             id,
             difficulty,
@@ -536,19 +586,19 @@ export function generateValidPuzzle(
     fallbackSeed += fallbackStep;
   }
 
-
-  // Absolute last resort: find a puzzle with a unique solution (still must be valid).
-  // Drops the "no guessing" requirement but never returns a multi-solution puzzle.
+  // Absolute last resort: wider search with high-density step.
+  // Still guarantees 100% compliance with all rules.
   let lastResortSeed = seed + 10_000_000;
   for (let attempt = 0; attempt < 5000; attempt++) {
     const rng = new SeededRandom(lastResortSeed);
     const queens = findQueenPlacements(size, rng);
     if (queens && queens.length === size) {
       const regions = generateRegions(size, queens, rng);
-      // Must have exactly 1 solution and pass integrity check — no exceptions
       if (
+        regions.length === size &&
         countSolutions(size, regions, 2) === 1 &&
-        validateSolution(size, regions, queens)
+        validateSolution(size, regions, queens) &&
+        isLogicallySolvable(size, regions)
       ) {
         return {
           id,
@@ -561,10 +611,9 @@ export function generateValidPuzzle(
         };
       }
     }
-    lastResortSeed += 3; // dense stepping to cover more ground
+    lastResortSeed += 37;
   }
 
-  // Should be unreachable — but TypeScript requires a return
   throw new Error(
     `[Bitdoku] Failed to generate a valid puzzle for ${difficulty} with seed ${seed}. ` +
     `Please report this as a bug.`

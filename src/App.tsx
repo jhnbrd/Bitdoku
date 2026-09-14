@@ -134,7 +134,14 @@ export const App: React.FC = () => {
     const savedProgress = await db.levels.get(key);
 
     let initialGrid: CellState[][];
-    if (savedProgress?.currentGridState && !savedProgress.completed && savedProgress.currentGridState.length === puzzle.size) {
+    // Check if saved progress exists and was created under current generator engine (v2)
+    const savedGenVer = (savedProgress as unknown as { generatorVersion?: number })?.generatorVersion;
+    if (
+      savedProgress?.currentGridState &&
+      !savedProgress.completed &&
+      savedProgress.currentGridState.length === puzzle.size &&
+      savedGenVer === 2
+    ) {
       initialGrid = savedProgress.currentGridState;
     } else {
       initialGrid = Array.from({ length: puzzle.size }, () =>
@@ -221,7 +228,8 @@ export const App: React.FC = () => {
         difficulty: activePuzzle.difficulty,
         completed: false,
         bestTimeMs: progressMap.get(activePuzzle.id)?.bestTimeMs || 0,
-        currentGridState: newGrid
+        currentGridState: newGrid,
+        generatorVersion: 2
       }).catch(console.error);
     }
 

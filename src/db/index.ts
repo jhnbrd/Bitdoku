@@ -13,6 +13,7 @@ export interface LevelProgress {
   completed: boolean;
   bestTimeMs: number;
   currentGridState?: ('empty' | 'bit' | 'blocked')[][];
+  generatorVersion?: number;
 }
 
 export interface DailyRecord {
